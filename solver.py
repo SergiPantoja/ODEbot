@@ -61,7 +61,7 @@ def create_model(name, f, t_span, initial_conditions, **kwargs):
     else:
         ts = [float(i) for i in t_span.split(',')]
 
-    te = int(kwargs['t_eval']) if ('t_eval' in kwargs and kwargs['t_eval'] is not None) else 10000
+    te = int(kwargs['t_eval']) if ('t_eval' in kwargs and kwargs['t_eval'] is not None) else 1000
     desc = kwargs['description'] if 'description' in kwargs else None
 
     functions = []

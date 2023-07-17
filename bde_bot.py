@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # ------------------------- CONVERSATION STATES ----------------------------#
 SCENARIO, SOLVE_OR_EDIT_TUTORIAL, INPUT_IC_TUTORIAL = range(3)
-VARIABLES, EQUATION, TS_IC, NPOINTS, PARAMETERS, SOLVE_OR_EDIT, EDIT, EDITED = range(8)
+VARIABLES, EQUATION, TS_IC, PARAMETERS, SOLVE_OR_EDIT, EDIT, EDITED = range(7)
 
 # ------------------------------ KEYBOARDS ---------------------------------#
 keyboards = {
@@ -212,7 +212,7 @@ async def create_time_interval(update: Update, context: ContextTypes.DEFAULT_TYP
         return TS_IC
     else:
         # asks for the next initial condition if there are more variables.
-        # otherwise, asks for number of points to plot.
+        # otherwise, asks the user for the value of the parameters if any.
         #logs
         logger.info("User %s submitted initial condition: %s", update.message.from_user.first_name, update.message.text)
 
@@ -232,101 +232,81 @@ async def create_time_interval(update: Update, context: ContextTypes.DEFAULT_TYP
 
             return TS_IC
         else: 
-            msg = "Enter the number of points to plot\n"
-            msg += "i.e. <code>1000</code>."
-            if 'tutorial' in context.user_data:
-                if context.user_data['tutorial'] == 'rd':
-                    msg = context.user_data['msgs'][4] + msg
-            await update.message.reply_text(
-                msg,
-                parse_mode=ParseMode.HTML,
-            )
+            f = context.user_data['f']
+            # store number of points in the user_data dictionary
+            context.user_data['te'] = 1000 # default value, can be changed by the user
 
-            return NPOINTS
+            # automatically detect parameters in f
+            # first get all names using python ast
+            p = [
+                node.id for node in ast.walk(ast.parse(f)) 
+                if isinstance(node, ast.Name)
+            ]
+            # then remove duplicates
+            p = list(set(p))
+            # then remove 'y'
+            p.remove('y')
+            # then remove math functions
+            p = [x for x in p if x not in dir(math)]
+            # get all function calls using python ast
+            f_calls = [node.func.id for node in ast.walk(ast.parse(f)) if isinstance(node, ast.Call)]
+            print('function calls: ', f_calls)
+            # then remove function calls from p
+            p = [x for x in p if x not in f_calls]
+            print('parameters', p)
+            # store parameters in a queue in the user_data dictionary
+            context.user_data['p_names'] = deque(p)
+            context.user_data['p_list'] = p
 
-async def create_npoints(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ State of the create conversation.
-    Stores the number of points to plot previously submitted by the user in the user_data dictionary.
-    Then asks the user for the value of the parameters if any.
-    """
-    f = context.user_data['f']
-    #logs
-    logger.info("User %s submitted number of points: %s", update.message.from_user.first_name, update.message.text)
+            # replace all coincidences of the strings in p with the string f with
+            # "p[i]" where i is the index of the string in p
+            for i, v in enumerate(p):
+                context.user_data['f'] = context.user_data['f'].replace(v.lower(), f"p[{i}]")
+            
+            # ask for parameters
+            if len(p) > 0:
+                current = context.user_data['p_names'].popleft()
 
-    # store number of points in the user_data dictionary
-    context.user_data['te'] = update.message.text
+                msg = f"Enter the value of {current}\n"
+                msg += f"<code>{current} = ...</code>."
+                if 'tutorial' in context.user_data:
+                    if context.user_data['tutorial'] == 'rd':
+                        msg = context.user_data['msgs'][5] + msg
+                await update.message.reply_text(
+                    msg,
+                    parse_mode=ParseMode.HTML,
+                )
+                return PARAMETERS
+            else:
+                # no parameters to process
+                # create model
+                params = context.user_data['params'] if 'params' in context.user_data else None
+                f = context.user_data['f']
+                ic = context.user_data['ic']
+                ts = context.user_data['ts']
+                te = context.user_data['te']
+                # print
+                print('f', f)
+                print('ic', ic)
+                print('ts', ts)
+                print('te', te)
+                print('params', params)
+                #
+                m = create_model("model", f, ts, ic, t_eval=te, p=params)
+                #store model
+                context.user_data['model'] = m
 
-    # automatically detect parameters in f
-    # first get all names using python ast
-    p = [
-        node.id for node in ast.walk(ast.parse(f)) 
-        if isinstance(node, ast.Name)
-    ]
-    # then remove duplicates
-    p = list(set(p))
-    # then remove 'y'
-    p.remove('y')
-    # then remove math functions
-    p = [x for x in p if x not in dir(math)]
-    # get all function calls using python ast
-    f_calls = [node.func.id for node in ast.walk(ast.parse(f)) if isinstance(node, ast.Call)]
-    print('function calls: ', f_calls)
-    # then remove function calls from p
-    p = [x for x in p if x not in f_calls]
-    print('parameters', p)
-    # store parameters in a queue in the user_data dictionary
-    context.user_data['p_names'] = deque(p)
-    context.user_data['p_list'] = p
-
-    # replace all coincidences of the strings in p with the string f with
-    # "p[i]" where i is the index of the string in p
-    for i, v in enumerate(p):
-        context.user_data['f'] = context.user_data['f'].replace(v.lower(), f"p[{i}]")
-    
-    # ask for parameters
-    if len(p) > 0:
-        current = context.user_data['p_names'].popleft()
-
-        msg = f"Enter the value of {current}\n"
-        msg += f"<code>{current} = ...</code>."
-        if 'tutorial' in context.user_data:
-            if context.user_data['tutorial'] == 'rd':
-                msg = context.user_data['msgs'][5] + msg
-        await update.message.reply_text(
-            msg,
-            parse_mode=ParseMode.HTML,
-        )
-        return PARAMETERS
-    else:
-        # no parameters to process
-        # create model
-        params = context.user_data['params'] if 'params' in context.user_data else None
-        f = context.user_data['f']
-        ic = context.user_data['ic']
-        ts = context.user_data['ts']
-        te = context.user_data['te']
-        # print
-        print('f', f)
-        print('ic', ic)
-        print('ts', ts)
-        print('te', te)
-        print('params', params)
-        #
-        m = create_model("model", f, ts, ic, t_eval=te, p=params)
-        #store model
-        context.user_data['model'] = m
-
-        msg = "Model created. Do you want to solve and plot the model or edit it first?"
-        if 'tutorial' in context.user_data:
-            if context.user_data['tutorial'] == 'rd':
-                msg = context.user_data['msgs'][6] + msg
-        await update.message.reply_text(
-            msg,
-            reply_markup=ReplyKeyboardMarkup(
-                keyboards["solve_or_edit"], one_time_keyboard=True, resize_keyboard=True
-            ),
-        )
-        return SOLVE_OR_EDIT
+                msg = "Model created. Do you want to solve and plot the model or edit it first?"
+                if 'tutorial' in context.user_data:
+                    if context.user_data['tutorial'] == 'rd':
+                        msg = context.user_data['msgs'][6] + msg
+                await update.message.reply_text(
+                    msg,
+                    reply_markup=ReplyKeyboardMarkup(
+                        keyboards["solve_or_edit"], one_time_keyboard=True, resize_keyboard=True
+                    ),
+                )
+                return SOLVE_OR_EDIT
 
 async def create_parameters(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ State of the create conversation.
@@ -779,7 +759,6 @@ def main():
             VARIABLES: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_variables)],
             EQUATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_equation)],
             TS_IC: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_time_interval)],
-            NPOINTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_npoints)],
             PARAMETERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_parameters)],
             SOLVE_OR_EDIT: [MessageHandler(filters.Regex(r"^solve$"), solve), MessageHandler(filters.Regex(r"^edit$"), edit)],
             EDIT: [MessageHandler(filters.Regex(r"^parameters$|^initial conditions$|^time interval$|^number of points$"), input_edit)],
